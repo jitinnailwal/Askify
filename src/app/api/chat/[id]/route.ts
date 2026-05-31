@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getRequester, ownerWhere } from "@/lib/identity";
-import { deleteVectorsByDocument } from "@/lib/pinecone";
 
 export async function GET(
   _req: Request,
@@ -12,23 +11,23 @@ export async function GET(
   const where = ownerWhere(requester);
   if (!where) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
 
-  const document = await prisma.document.findFirst({
+  const session = await prisma.chatSession.findFirst({
     where: { id, ...where },
     select: {
       id: true,
       title: true,
-      fileName: true,
-      fileSize: true,
-      tags: true,
-      status: true,
-      createdAt: true,
+      document: { select: { id: true, title: true, status: true } },
+      messages: {
+        orderBy: { createdAt: "asc" },
+        select: { id: true, role: true, content: true, sources: true, createdAt: true },
+      },
     },
   });
 
-  if (!document) {
-    return NextResponse.json({ error: "Document not found." }, { status: 404 });
+  if (!session) {
+    return NextResponse.json({ error: "Chat session not found." }, { status: 404 });
   }
-  return NextResponse.json({ document });
+  return NextResponse.json({ session });
 }
 
 export async function DELETE(
@@ -40,16 +39,11 @@ export async function DELETE(
   const where = ownerWhere(requester);
   if (!where) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
 
-  const document = await prisma.document.findFirst({ where: { id, ...where } });
-  if (!document) {
-    return NextResponse.json({ error: "Document not found." }, { status: 404 });
+  const session = await prisma.chatSession.findFirst({ where: { id, ...where } });
+  if (!session) {
+    return NextResponse.json({ error: "Chat session not found." }, { status: 404 });
   }
 
-  // Best-effort vector cleanup; DB cascade removes chunks/chat sessions.
-  await deleteVectorsByDocument(id).catch((e) =>
-    console.error(`[documents.delete:${id}] vector cleanup failed:`, e)
-  );
-  await prisma.document.delete({ where: { id } });
-
+  await prisma.chatSession.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

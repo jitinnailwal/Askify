@@ -13,7 +13,7 @@ import {
   X,
   Sun,
   Moon,
-  FileText,
+  Menu,
 } from "lucide-react";
 import { LogoWithText } from "./logo";
 import { useTheme } from "./theme-provider";
@@ -60,6 +60,7 @@ export function Sidebar() {
             </Link>
             <button
               onClick={() => setSidebarOpen(false)}
+              aria-label="Close menu"
               className="lg:hidden p-1 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
             >
               <X size={20} />
@@ -147,9 +148,10 @@ export function MobileHeader() {
       <div className="flex items-center justify-between h-full px-4">
         <button
           onClick={toggleSidebar}
-          className="p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
+          aria-label="Open menu"
+          className="p-2.5 -ml-1 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
         >
-          <FileText size={20} className="text-gray-700 dark:text-gray-300" />
+          <Menu size={20} className="text-gray-700 dark:text-gray-300" />
         </button>
         <LogoWithText size={28} />
         <div className="w-9" />

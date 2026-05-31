@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel
+
+# claude code local files
+.claude/
+
+# stray root-level duplicate of public/Askify_logo.png (real asset lives in /public)
+/Askify_logo.png

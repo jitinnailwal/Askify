@@ -7,6 +7,7 @@ import { X, Upload, FileText, Loader2, CheckCircle, AlertCircle } from "lucide-r
 import { useSession } from "next-auth/react";
 import toast from "react-hot-toast";
 import { getGuestId } from "@/lib/guest";
+import { useDialog } from "@/lib/use-dialog";
 
 interface UploadModalProps {
   open: boolean;
@@ -21,6 +22,11 @@ export function UploadModal({ open, onClose, onSuccess }: UploadModalProps) {
   const [tags, setTags] = useState("");
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<"idle" | "uploading" | "processing" | "done" | "error">("idle");
+
+  // Don't allow Esc/focus-restore to dismiss the modal mid-upload.
+  const dialogRef = useDialog(open, () => {
+    if (!uploading) onClose();
+  });
 
   const onDrop = useCallback((accepted: File[]) => {
     if (accepted.length > 0) {
@@ -129,14 +135,22 @@ export function UploadModal({ open, onClose, onSuccess }: UploadModalProps) {
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="w-full max-w-lg bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden">
+            <div
+              ref={dialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="upload-modal-title"
+              tabIndex={-1}
+              className="w-full max-w-lg bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden focus:outline-none"
+            >
               {/* Header */}
               <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-800">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                <h2 id="upload-modal-title" className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                   Upload Document
                 </h2>
                 <button
                   onClick={onClose}
+                  aria-label="Close"
                   className="p-1 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
                 >
                   <X size={20} />

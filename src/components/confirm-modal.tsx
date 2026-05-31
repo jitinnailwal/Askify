@@ -2,6 +2,7 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle } from "lucide-react";
+import { useDialog } from "@/lib/use-dialog";
 
 interface ConfirmModalProps {
   open: boolean;
@@ -20,6 +21,8 @@ export function ConfirmModal({
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
+  const dialogRef = useDialog(open, onCancel);
+
   return (
     <AnimatePresence>
       {open && (
@@ -39,14 +42,19 @@ export function ConfirmModal({
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
           >
             <div
-              className="w-full max-w-sm bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden"
+              ref={dialogRef}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="confirm-modal-title"
+              tabIndex={-1}
+              className="w-full max-w-sm bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden focus:outline-none"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="p-6 text-center">
                 <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-950/40 flex items-center justify-center mx-auto mb-4">
                   <AlertTriangle size={24} className="text-red-500" />
                 </div>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                <h3 id="confirm-modal-title" className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
                   {title}
                 </h3>
                 <p className="text-sm text-gray-500 dark:text-gray-400">

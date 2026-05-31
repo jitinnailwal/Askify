@@ -1,64 +1,55 @@
-import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getRequester, ownerWhere } from "@/lib/identity";
 
-export async function GET(req: NextRequest) {
-  const session = await auth();
-  const guestId = req.headers.get("x-guest-id");
-
-  if (!session?.user?.id && !guestId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const where = session?.user?.id
-    ? { userId: session.user.id }
-    : { guestId: guestId! };
+// List the requester's chat sessions (most recent first).
+export async function GET() {
+  const requester = await getRequester();
+  const where = ownerWhere(requester);
+  if (!where) return NextResponse.json({ sessions: [] });
 
   const sessions = await prisma.chatSession.findMany({
     where,
     orderBy: { updatedAt: "desc" },
-    include: {
-      document: { select: { title: true } },
-      _count: { select: { messages: true } },
+    select: {
+      id: true,
+      title: true,
+      updatedAt: true,
+      document: { select: { id: true, title: true } },
     },
   });
 
-  return NextResponse.json(sessions);
+  return NextResponse.json({ sessions });
 }
 
-export async function POST(req: NextRequest) {
-  const session = await auth();
-  const guestId = req.headers.get("x-guest-id");
+// Create a new chat session for one of the requester's documents.
+export async function POST(req: Request) {
+  const requester = await getRequester();
+  const where = ownerWhere(requester);
+  if (!where) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+
   const { documentId } = await req.json();
-
-  if (!session?.user?.id && !guestId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!documentId) {
+    return NextResponse.json({ error: "documentId is required." }, { status: 400 });
   }
 
-  // Verify document ownership before creating chat
-  const document = await prisma.document.findUnique({
-    where: { id: documentId },
-    select: { userId: true, guestId: true },
+  const document = await prisma.document.findFirst({
+    where: { id: documentId, ...where },
+    select: { id: true, title: true },
   });
-
   if (!document) {
-    return NextResponse.json({ error: "Document not found" }, { status: 404 });
+    return NextResponse.json({ error: "Document not found." }, { status: 404 });
   }
 
-  if (document.userId && document.userId !== session?.user?.id) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  if (document.guestId && document.guestId !== guestId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
-  const chatSession = await prisma.chatSession.create({
+  const session = await prisma.chatSession.create({
     data: {
-      documentId,
-      userId: session?.user?.id || null,
-      guestId: session?.user?.id ? null : guestId || null,
+      documentId: document.id,
+      title: document.title,
+      userId: requester.userId,
+      guestId: requester.guestId,
     },
+    select: { id: true },
   });
 
-  return NextResponse.json(chatSession);
+  return NextResponse.json({ id: session.id }, { status: 201 });
 }

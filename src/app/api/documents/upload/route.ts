@@ -1,138 +1,94 @@
-import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getRequester } from "@/lib/identity";
 import { parsePDF, parseText } from "@/lib/pdf-parser";
-import { chunkText } from "@/lib/chunker";
-import { generateEmbedding } from "@/lib/gemini";
-import { upsertVectors } from "@/lib/pinecone";
-import { v4 as uuidv4 } from "uuid";
+import { processDocument } from "@/lib/process";
+import { GUEST_LIMITS } from "@/lib/guest";
 
-export async function POST(req: NextRequest) {
+export const maxDuration = 60;
+
+const MAX_SIZE = 20 * 1024 * 1024; // 20MB
+
+export async function POST(req: Request) {
   try {
-    const session = await auth();
-    const guestId = req.headers.get("x-guest-id");
-
-    if (!session?.user?.id && !guestId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const requester = await getRequester();
+    if (!requester.userId && !requester.guestId) {
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
-    // Check guest limits
-    if (!session?.user?.id && guestId) {
-      const guestDocs = await prisma.document.count({ where: { guestId } });
-      if (guestDocs >= 1) {
+    // Enforce the free-tier document cap for guests.
+    if (requester.guestId) {
+      const count = await prisma.document.count({
+        where: { guestId: requester.guestId },
+      });
+      if (count >= GUEST_LIMITS.maxDocuments) {
         return NextResponse.json(
-          { error: "Guest limit reached. Please sign up to upload more documents." },
+          { error: "Guest limit reached. Sign in to upload more documents." },
           { status: 403 }
         );
       }
     }
 
     const formData = await req.formData();
-    const file = formData.get("file") as File;
-    const title = (formData.get("title") as string) || file.name;
-    const tagsRaw = formData.get("tags") as string;
-    const tags = tagsRaw ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean) : [];
+    const file = formData.get("file");
+    const title = (formData.get("title") as string | null)?.trim();
+    const tagsRaw = (formData.get("tags") as string | null) || "";
 
-    if (!file) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    if (!file || !(file instanceof File)) {
+      return NextResponse.json({ error: "No file provided." }, { status: 400 });
+    }
+    if (file.size > MAX_SIZE) {
+      return NextResponse.json({ error: "File exceeds the 20MB limit." }, { status: 400 });
     }
 
-    // Parse file content
     const buffer = Buffer.from(await file.arrayBuffer());
+    const name = file.name.toLowerCase();
+
     let content: string;
-
-    if (file.type === "application/pdf") {
+    if (name.endsWith(".pdf") || file.type === "application/pdf") {
       content = await parsePDF(buffer);
-    } else {
+    } else if (name.endsWith(".txt") || name.endsWith(".md") || file.type.startsWith("text/")) {
       content = parseText(buffer.toString("utf-8"));
-    }
-
-    if (!content.trim()) {
+    } else {
       return NextResponse.json(
-        { error: "Could not extract text from file" },
+        { error: "Unsupported file type. Upload a PDF, TXT, or MD file." },
         { status: 400 }
       );
     }
 
-    // Create document
+    if (!content.trim()) {
+      return NextResponse.json(
+        { error: "Could not extract any text from this file." },
+        { status: 422 }
+      );
+    }
+
+    const tags = tagsRaw
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+
     const document = await prisma.document.create({
       data: {
-        title,
+        title: title || file.name,
         fileName: file.name,
         fileSize: file.size,
         content,
         tags,
         status: "processing",
-        userId: session?.user?.id || null,
-        guestId: session?.user?.id ? null : guestId,
+        userId: requester.userId,
+        guestId: requester.guestId,
       },
+      select: { id: true, status: true },
     });
 
-    // Process in background (chunking + embeddings)
-    processDocument(document.id, content).catch(console.error);
+    // Kick off embedding/indexing in the background; the client polls status.
+    void processDocument(document.id, content);
 
-    return NextResponse.json({
-      id: document.id,
-      title: document.title,
-      status: "processing",
-    });
+    return NextResponse.json({ id: document.id, status: document.status }, { status: 201 });
   } catch (error) {
-    console.error("Upload error:", error instanceof Error ? error.message : error);
-    console.error("Stack:", error instanceof Error ? error.stack : "");
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Upload failed" },
-      { status: 500 }
-    );
-  }
-}
-
-async function processDocument(documentId: string, content: string) {
-  try {
-    const chunks = chunkText(content);
-    console.log(`Processing ${chunks.length} chunks for document ${documentId}`);
-
-    // Create chunks sequentially and generate embeddings one at a time
-    for (const chunk of chunks) {
-      const vectorId = uuidv4();
-
-      const dbChunk = await prisma.chunk.create({
-        data: {
-          content: chunk.content,
-          index: chunk.index,
-          documentId,
-          vectorId,
-        },
-      });
-
-      console.log(`Chunk ${chunk.index + 1}/${chunks.length}: generating embedding...`);
-      const embedding = await generateEmbedding(dbChunk.content);
-
-      await upsertVectors([
-        {
-          id: vectorId,
-          values: embedding,
-          metadata: {
-            documentId,
-            chunkId: dbChunk.id,
-            content: dbChunk.content.slice(0, 1000),
-          },
-        },
-      ]);
-      console.log(`Chunk ${chunk.index + 1}/${chunks.length}: done`);
-    }
-
-    await prisma.document.update({
-      where: { id: documentId },
-      data: { status: "ready" },
-    });
-    console.log(`Document ${documentId} processing complete`);
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error("Processing error:", msg);
-    console.error("Stack:", error instanceof Error ? error.stack : "");
-    await prisma.document.update({
-      where: { id: documentId },
-      data: { status: "error" },
-    });
+    const msg = error instanceof Error ? error.message : "Upload failed.";
+    console.error("[upload] error:", error);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
