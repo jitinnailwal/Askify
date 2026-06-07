@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getRequester } from "@/lib/identity";
 import { parsePDF, parseText } from "@/lib/pdf-parser";
@@ -82,8 +82,12 @@ export async function POST(req: Request) {
       select: { id: true, status: true },
     });
 
-    // Kick off embedding/indexing in the background; the client polls status.
-    void processDocument(document.id, content);
+    // Run embedding/indexing after the response is sent. On serverless
+    // platforms (Vercel) `after` extends the function lifetime via waitUntil so
+    // the work actually completes — a bare `void` promise would be dropped the
+    // moment the function returns, leaving the document stuck in "processing".
+    // The client polls the status endpoint while this runs.
+    after(() => processDocument(document.id, content));
 
     return NextResponse.json({ id: document.id, status: document.status }, { status: 201 });
   } catch (error) {
